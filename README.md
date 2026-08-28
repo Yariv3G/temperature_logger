@@ -64,7 +64,7 @@ failures. Press Ctrl+C to close the file cleanly.
 ## HTTP API
 
 - `GET /api/status` — state, limits, sensor addresses, and latest samples
-- `GET /api/history` — latest sample in graph-compatible JSON
+- `GET /api/history` — compatibility alias for the current status/sample
 - `POST /api/control` with `action=start` or `action=stop`
 - `POST /api/config` with form fields `interval`, `lower`, and `upper`
 - `GET /api/latest?sensor=0` — latest sample as two-column CSV
