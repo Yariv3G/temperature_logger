@@ -1,0 +1,16 @@
+.idea/
+.vscode/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+host/config.yaml
+data/
+*.csv
+*.log
+*.hex
+*.elf
+.pio/
+.tools/
+.arduino-data/

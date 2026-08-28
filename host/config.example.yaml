@@ -1,0 +1,6 @@
+# Reference values for launching collector.py.
+device_ip: 10.100.102.247
+sensor: 0
+poll_seconds: 0.5
+http_timeout_seconds: 2.0
+output: data/temperature.csv
