@@ -33,10 +33,12 @@ canvas{display:block;width:100%;height:370px}.cards{display:grid;gap:8px;margin-
 const colors=['#62a7ff','#3ddc97','#ffc857','#ff7eb6','#b89cff','#52d6d3','#ff8b66','#d4e157'];
 const series={},maxPoints=300,cv=document.querySelector('#plot'),ctx=cv.getContext('2d');let configured=false,lastSeq=-1;
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function ft(s){s=Math.max(0,Math.round(s));let h=(s/3600)|0,m=((s%3600)/60)|0,q=s%60;return h?h+':'+String(m).padStart(2,'0')+':'+String(q).padStart(2,'0'):m+':'+String(q).padStart(2,'0')}
 function draw(){const dpr=devicePixelRatio||1,w=cv.clientWidth,h=cv.clientHeight;if(cv.width!=w*dpr||cv.height!=h*dpr){cv.width=w*dpr;cv.height=h*dpr}ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);ctx.strokeStyle='#2d3b55';ctx.fillStyle='#9badc7';ctx.font='11px system-ui';
 let vals=Object.values(series).flatMap(x=>x.map(p=>p.y)),lo=vals.length?Math.floor(Math.min(...vals)-2):0,hi=vals.length?Math.ceil(Math.max(...vals)+2):50;if(hi<=lo)hi=lo+1;
 for(let i=0;i<=5;i++){let y=10+(h-30)*i/5;ctx.beginPath();ctx.moveTo(38,y);ctx.lineTo(w-8,y);ctx.stroke();ctx.fillText((hi-(hi-lo)*i/5).toFixed(1),2,y+4)}
 let all=Object.values(series).flat(),xmin=all.length?Math.min(...all.map(p=>p.x)):0,xmax=all.length?Math.max(...all.map(p=>p.x)):60;if(xmax<=xmin)xmax=xmin+60;
+ctx.textAlign='center';for(let i=0;i<=5;i++){let x=38+(w-46)*i/5;ctx.strokeStyle='#2d3b55';ctx.beginPath();ctx.moveTo(x,10);ctx.lineTo(x,h-30);ctx.stroke();ctx.fillStyle='#9badc7';ctx.fillText(ft((xmax-xmin)*i/5),x,h-17)}ctx.textAlign='left';
 Object.keys(series).forEach((k,n)=>{ctx.strokeStyle=colors[n%colors.length];ctx.lineWidth=2;ctx.beginPath();series[k].forEach((p,i)=>{let x=38+(w-46)*(p.x-xmin)/(xmax-xmin),y=10+(h-30)*(hi-p.y)/(hi-lo);i?ctx.lineTo(x,y):ctx.moveTo(x,y)});ctx.stroke()});ctx.fillStyle='#9badc7';ctx.fillText('Elapsed time (s)',Math.max(40,w/2-40),h-3)}
 async function post(path,data){let r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(data)});if(!r.ok)throw Error(await r.text());return r.json()}
 async function poll(){try{let r=await fetch('/api/status',{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);let s=await r.json();
