@@ -1,6 +1,4 @@
 #pragma once
 
-// Copy this file to secrets.h and enter the test-network credentials.
-// secrets.h is ignored by git.
-constexpr char WIFI_SSID[] = "replace-with-wifi-ssid";
-constexpr char WIFI_PASSWORD[] = "replace-with-wifi-password";
+// Wi-Fi credentials are configured over the serial port at boot.
+// See firmware/esp32_wifi_logger/README.md for the setup procedure.

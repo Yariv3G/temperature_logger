@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from urllib.parse import urlencode
@@ -49,6 +50,8 @@ class OfflineSmokeTests(unittest.TestCase):
         initial = json.loads(request(self.base_url, "/api/status"))
         self.assertFalse(initial["running"])
         self.assertEqual(initial["sensorCount"], 2)
+        self.assertEqual(initial["sensors"][0]["sampleCount"], 0)
+        self.assertIsNone(initial["sensors"][0]["average"])
 
         configured = json.loads(
             request(
@@ -65,6 +68,17 @@ class OfflineSmokeTests(unittest.TestCase):
         self.assertTrue(started["ok"])
         running = json.loads(request(self.base_url, "/api/status"))
         self.assertTrue(running["running"])
+        sensor = running["sensors"][0]
+        self.assertEqual(sensor["sampleCount"], 1)
+        self.assertLessEqual(sensor["min"], sensor["average"])
+        self.assertLessEqual(sensor["average"], sensor["max"])
+
+        time.sleep(1.1)
+        accumulated = json.loads(request(self.base_url, "/api/status"))
+        self.assertGreaterEqual(accumulated["sensors"][0]["sampleCount"], 2)
+        request(self.base_url, "/api/control", {"action": "start"})
+        restarted = json.loads(request(self.base_url, "/api/status"))
+        self.assertEqual(restarted["sensors"][0]["sampleCount"], 1)
 
         latest = request(self.base_url, "/api/latest?sensor=0").decode()
         self.assertEqual(latest.splitlines()[0], "time,temperature")
@@ -74,16 +88,27 @@ class OfflineSmokeTests(unittest.TestCase):
         self.assertEqual(history["sensor"], 0)
         self.assertEqual(len(history["points"][0]), 2)
 
-        downloaded = request(self.base_url, "/api/csv").decode()
-        self.assertEqual(
-            downloaded.splitlines()[0], "time_s,sensor,temperature_c"
-        )
+        downloaded = request(self.base_url, "/api/csv?sensor=0").decode()
+        self.assertEqual(downloaded.splitlines()[0], "time,temperature")
 
         stopped = json.loads(
             request(self.base_url, "/api/control", {"action": "stop"})
         )
         self.assertTrue(stopped["ok"])
         self.assertFalse(json.loads(request(self.base_url, "/api/status"))["running"])
+
+    def test_temperature_metrics(self) -> None:
+        request(self.base_url, "/api/control", {"action": "start"})
+        for metric in ("current", "min", "max", "average"):
+            payload = json.loads(
+                request(self.base_url, f"/api/temperature?metric={metric}&sensor=0")
+            )
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["metric"], metric)
+            self.assertEqual(payload["sensor"], 0)
+            self.assertEqual(payload["unit"], "C")
+            self.assertTrue(payload["valid"])
+        request(self.base_url, "/api/control", {"action": "stop"})
 
     def test_collector_writes_two_column_csv(self) -> None:
         request(self.base_url, "/api/control", {"action": "start"})

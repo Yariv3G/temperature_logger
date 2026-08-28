@@ -4,7 +4,7 @@
 #include <OneWire.h>
 
 #include "config.h"
-#include "secrets.h"
+#include "serial_wifi.h"
 #include "web_assets.h"
 
 OneWire oneWire(ONE_WIRE_PIN);
@@ -15,6 +15,10 @@ SensorAddress sensorAddresses[MAX_SENSORS];
 float temperaturesC[MAX_SENSORS];
 bool sensorValid[MAX_SENSORS];
 uint8_t sensorCount = 0;
+float runMinimums[MAX_SENSORS];
+float runMaximums[MAX_SENSORS];
+double runSums[MAX_SENSORS];
+uint32_t runSampleCounts[MAX_SENSORS];
 
 uint32_t historyTimes[MAX_HISTORY_SAMPLES];
 float historyTemperatures[MAX_HISTORY_SAMPLES][MAX_SENSORS];
@@ -23,7 +27,6 @@ uint16_t historyHead = 0;
 
 bool acquisitionRunning = false;
 bool alarmActive = false;
-bool accessPointMode = false;
 float lowerLimitC = DEFAULT_LOWER_LIMIT_C;
 float upperLimitC = DEFAULT_UPPER_LIMIT_C;
 unsigned long sampleIntervalMs = DEFAULT_SAMPLE_INTERVAL_MS;
@@ -70,6 +73,29 @@ void updateAlarm() {
   digitalWrite(ALARM_OUTPUT_PIN, alarmActive ? HIGH : LOW);
 }
 
+void resetRunData() {
+  historyCount = 0;
+  historyHead = 0;
+  for (uint8_t sensor = 0; sensor < MAX_SENSORS; ++sensor) {
+    runMinimums[sensor] = INFINITY;
+    runMaximums[sensor] = -INFINITY;
+    runSums[sensor] = 0.0;
+    runSampleCounts[sensor] = 0;
+  }
+}
+
+void updateRunStatistics() {
+  for (uint8_t sensor = 0; sensor < sensorCount; ++sensor) {
+    if (!sensorValid[sensor]) {
+      continue;
+    }
+    runMinimums[sensor] = min(runMinimums[sensor], temperaturesC[sensor]);
+    runMaximums[sensor] = max(runMaximums[sensor], temperaturesC[sensor]);
+    runSums[sensor] += temperaturesC[sensor];
+    ++runSampleCounts[sensor];
+  }
+}
+
 void recordHistory() {
   historyTimes[historyHead] = sampleTimeSeconds;
   for (uint8_t sensor = 0; sensor < MAX_SENSORS; ++sensor) {
@@ -110,22 +136,48 @@ void takeSample() {
   sampleTimeSeconds = millis() / 1000UL;
   ++sampleSequence;
   updateAlarm();
-  recordHistory();
+  if (acquisitionRunning) {
+    updateRunStatistics();
+    recordHistory();
+  }
+}
+
+void serialWifiTakeSample() { takeSample(); }
+
+void serialWifiPrintTemperatures() {
+  if (sensorCount == 0) {
+    Serial.println(F("No DS18B20 sensors detected."));
+    return;
+  }
+
+  Serial.println(F("Sensor readings:"));
+  for (uint8_t sensor = 0; sensor < sensorCount; ++sensor) {
+    Serial.print(F("  Sensor "));
+    Serial.print(sensor);
+    Serial.print(F(" ("));
+    Serial.print(addressText(sensorAddresses[sensor]));
+    Serial.print(F("): "));
+    if (sensorValid[sensor]) {
+      Serial.print(temperaturesC[sensor], 3);
+      Serial.println(F(" C"));
+    } else {
+      Serial.println(F("invalid"));
+    }
+  }
 }
 
 String statusJson() {
   String json;
-  json.reserve(320 + sensorCount * 100);
+  json.reserve(320 + sensorCount * 180);
   json += F("{\"running\":");
   json += acquisitionRunning ? F("true") : F("false");
   json += F(",\"alarm\":");
   json += alarmActive ? F("true") : F("false");
   json += F(",\"wifi\":");
   json += WiFi.status() == WL_CONNECTED ? F("true") : F("false");
-  json += F(",\"apMode\":");
-  json += accessPointMode ? F("true") : F("false");
+  json += F(",\"apMode\":false");
   json += F(",\"ip\":\"");
-  json += accessPointMode ? WiFi.softAPIP().toString() : WiFi.localIP().toString();
+  json += WiFi.localIP().toString();
   json += F("\",\"interval\":");
   json += String(sampleIntervalMs / 1000UL);
   json += F(",\"lower\":");
@@ -149,6 +201,26 @@ String statusJson() {
     json += sensorValid[sensor] ? F("true") : F("false");
     json += F(",\"c\":");
     json += sensorValid[sensor] ? String(temperaturesC[sensor], 3) : String('0');
+    json += F(",\"min\":");
+    if (runSampleCounts[sensor]) {
+      json += String(runMinimums[sensor], 3);
+    } else {
+      json += F("null");
+    }
+    json += F(",\"max\":");
+    if (runSampleCounts[sensor]) {
+      json += String(runMaximums[sensor], 3);
+    } else {
+      json += F("null");
+    }
+    json += F(",\"average\":");
+    if (runSampleCounts[sensor]) {
+      json += String(runSums[sensor] / runSampleCounts[sensor], 3);
+    } else {
+      json += F("null");
+    }
+    json += F(",\"sampleCount\":");
+    json += String(runSampleCounts[sensor]);
     json += '}';
   }
   json += F("]}");
@@ -162,6 +234,118 @@ void sendJsonResult(bool ok, const String &message, int status = 200) {
   json += message;
   json += F("\"}");
   server.send(status, "application/json", json);
+}
+
+int requestedSensor() {
+  return server.hasArg("sensor") ? server.arg("sensor").toInt() : 0;
+}
+
+bool normalizeMetric(String &metric) {
+  metric.toLowerCase();
+  if (metric == F("avg")) {
+    metric = F("average");
+  }
+  return metric == F("current") || metric == F("max") || metric == F("min") ||
+         metric == F("average");
+}
+
+void considerTemperature(float value, float &minimum, float &maximum, float &sum,
+                         uint16_t &count) {
+  if (isnan(value)) {
+    return;
+  }
+  if (count == 0) {
+    minimum = maximum = value;
+  } else {
+    if (value < minimum) {
+      minimum = value;
+    }
+    if (value > maximum) {
+      maximum = value;
+    }
+  }
+  sum += value;
+  ++count;
+}
+
+bool metricValueForSensor(int sensor, const String &metric, float &value) {
+  if (sensor < 0 || sensor >= static_cast<int>(sensorCount)) {
+    return false;
+  }
+
+  takeSample();
+
+  if (metric == F("current")) {
+    if (!sensorValid[sensor]) {
+      return false;
+    }
+    value = temperaturesC[sensor];
+    return true;
+  }
+
+  float minimum = NAN;
+  float maximum = NAN;
+  float sum = 0.0F;
+  uint16_t count = 0;
+
+  for (uint16_t offset = 0; offset < historyCount; ++offset) {
+    const uint16_t index =
+        (historyHead + MAX_HISTORY_SAMPLES - historyCount + offset) %
+        MAX_HISTORY_SAMPLES;
+    considerTemperature(historyTemperatures[index][sensor], minimum, maximum, sum,
+                        count);
+  }
+
+  if (sensorValid[sensor]) {
+    considerTemperature(temperaturesC[sensor], minimum, maximum, sum, count);
+  }
+
+  if (count == 0) {
+    return false;
+  }
+
+  if (metric == F("min")) {
+    value = minimum;
+  } else if (metric == F("max")) {
+    value = maximum;
+  } else if (metric == F("average")) {
+    value = sum / static_cast<float>(count);
+  } else {
+    return false;
+  }
+
+  return true;
+}
+
+void handleTemperatureMetric() {
+  if (!server.hasArg("metric")) {
+    sendJsonResult(false, F("Missing metric"), 400);
+    return;
+  }
+
+  String metric = server.arg("metric");
+  if (!normalizeMetric(metric)) {
+    sendJsonResult(false, F("Metric must be current, max, min, or average"), 400);
+    return;
+  }
+
+  const int sensor = requestedSensor();
+  float value = NAN;
+  if (!metricValueForSensor(sensor, metric, value)) {
+    sendJsonResult(false, F("Sensor unavailable"), 404);
+    return;
+  }
+
+  String json = F("{\"ok\":true,\"sensor\":");
+  json += String(sensor);
+  json += F(",\"metric\":\"");
+  json += metric;
+  json += F("\",\"value\":");
+  json += String(value, 3);
+  json += F(",\"unit\":\"C\",\"time\":");
+  json += String(sampleTimeSeconds);
+  json += F(",\"valid\":true}");
+  server.send(200, "application/json", json);
 }
 
 void handleConfig() {
@@ -188,6 +372,7 @@ void handleConfig() {
 void handleControl() {
   const String action = server.arg("action");
   if (action == F("start")) {
+    resetRunData();
     acquisitionRunning = true;
     lastSampleMs = millis() - sampleIntervalMs;
     updateAlarm();
@@ -199,10 +384,6 @@ void handleControl() {
   } else {
     sendJsonResult(false, F("Action must be start or stop"), 400);
   }
-}
-
-int requestedSensor() {
-  return server.hasArg("sensor") ? server.arg("sensor").toInt() : 0;
 }
 
 void handleLatestCsv() {
@@ -279,6 +460,7 @@ void configureRoutes() {
             []() { server.send_P(200, "text/html; charset=utf-8", WEB_PAGE); });
   server.on("/api/status", HTTP_GET,
             []() { server.send(200, "application/json", statusJson()); });
+  server.on("/api/temperature", HTTP_GET, handleTemperatureMetric);
   server.on("/api/history", HTTP_GET, handleHistoryJson);
   server.on("/api/latest", HTTP_GET, handleLatestCsv);
   server.on("/api/csv", HTTP_GET, handleCsvDownload);
@@ -287,36 +469,17 @@ void configureRoutes() {
   server.onNotFound([]() { server.send(404, "text/plain", "Not found"); });
 }
 
-void connectWifi() {
-  WiFi.mode(WIFI_STA);
-  WiFi.setAutoReconnect(true);
-  WiFi.config(DEVICE_IP, GATEWAY, SUBNET, DNS_SERVER);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  Serial.print(F("Connecting to Wi-Fi"));
-  const unsigned long deadline = millis() + 20000UL;
-  while (WiFi.status() != WL_CONNECTED &&
-         static_cast<long>(deadline - millis()) > 0) {
-    delay(250);
-    Serial.print('.');
-  }
-  Serial.println();
-
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.print(F("Landing page: http://"));
-    Serial.println(WiFi.localIP());
-    if (MDNS.begin(MDNS_NAME)) {
-      MDNS.addService("http", "tcp", HTTP_PORT);
-      Serial.println(F("Also: http://temperature-logger.local/"));
-    }
-    return;
+bool ensureWifiConnection() {
+  const bool forceSetup = serialWifiBootConfigRequested(3000UL);
+  if (!forceSetup && serialWifiConnectStored(20000UL)) {
+    serialWifiPrintLandingPage();
+    return true;
   }
 
-  WiFi.disconnect(true);
-  WiFi.mode(WIFI_AP);
-  accessPointMode = WiFi.softAP("Temperature-Logger-Setup");
-  Serial.println(F("Wi-Fi connection failed; setup AP enabled"));
-  Serial.print(F("Join Temperature-Logger-Setup and open http://"));
-  Serial.println(WiFi.softAPIP());
+  while (!serialWifiRunSetup()) {
+    Serial.println(F("Wi-Fi setup failed. Restarting configuration..."));
+  }
+  return true;
 }
 
 void setup() {
@@ -324,11 +487,19 @@ void setup() {
   pinMode(ALARM_OUTPUT_PIN, OUTPUT);
   digitalWrite(ALARM_OUTPUT_PIN, LOW);
   discoverSensors();
-  connectWifi();
-  configureRoutes();
-  server.begin();
+  resetRunData();
   Serial.print(F("Detected DS18B20 sensors: "));
   Serial.println(sensorCount);
+
+  ensureWifiConnection();
+
+  if (MDNS.begin(MDNS_NAME)) {
+    MDNS.addService("http", "tcp", HTTP_PORT);
+    Serial.println(F("Also: http://temperature-logger.local/"));
+  }
+
+  configureRoutes();
+  server.begin();
 }
 
 void loop() {

@@ -14,10 +14,5 @@ constexpr float DEFAULT_LOWER_LIMIT_C = 10.0F;
 constexpr float DEFAULT_UPPER_LIMIT_C = 40.0F;
 constexpr uint16_t HTTP_PORT = 80;
 
-// Keep the same logger address as the Uno version. Never power both loggers
-// on the same network with this address.
-static IPAddress DEVICE_IP(10, 100, 102, 247);
-static IPAddress GATEWAY(10, 100, 102, 1);
-static IPAddress SUBNET(255, 255, 255, 0);
-static IPAddress DNS_SERVER(10, 100, 102, 1);
+// DHCP is used after serial Wi-Fi setup so the logger can move between networks.
 constexpr char MDNS_NAME[] = "temperature-logger";
