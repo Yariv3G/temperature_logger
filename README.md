@@ -1,101 +1,103 @@
-# DS18B20 Ethernet Temperature Logger
+# DS18B20 ATE Temperature Logger
 
-Arduino Uno/W5100 firmware and a host-PC collector for temperature longevity
-tests. The Arduino samples up to eight DS18B20 probes, logs to the shield's SD
-card, serves a browser dashboard at `http://10.100.102.247/`, and drives an
-active-high TTL alarm when a temperature leaves its configured window.
+Web-based temperature acquisition for longevity tests, with two supported
+controllers:
 
-## Hardware
+| Variant | Network | Landing-page storage | Durable logging |
+| --- | --- | --- | --- |
+| ESP32 DevKit | Wi-Fi | Embedded in ESP32 flash | Host PC collector |
+| Arduino Uno + W5100/W5500 shield | Ethernet | Shield SD card | SD + host PC |
 
-- Arduino Uno
-- W5100 Arduino Ethernet Shield with SD card
-- One or more externally powered DS18B20 probes
-- One 4.7 kΩ pull-up resistor
-- FAT16/FAT32 SD card (optional but recommended)
+Both variants expose the same browser controls and compatible HTTP API:
 
-Connect every probe in parallel: VCC to 5 V, GND to GND, and DATA to D2. Place
-the 4.7 kΩ resistor between D2 and 5 V. TTL alarm output is D6. See
-[`docs/wiring.md`](docs/wiring.md) for the pin map and bus-capacity guidance.
+- live time-versus-temperature graph
+- automatic DS18B20 discovery
+- Start/Stop
+- 1/2/5/10/custom-second sampling
+- upper/lower limits
+- fail-safe active-high TTL alarm
+- two-column host CSV output (`time,temperature`)
 
-## Firmware installation
-
-1. Install the Arduino IDE and select **Arduino Uno**.
-2. Install `OneWire`, `Ethernet`, and `SD` from Library Manager.
-3. Open `firmware/temperature_logger/temperature_logger.ino`.
-4. Review IP, pins, limits, and `MAX_SENSORS` in
-   `firmware/temperature_logger/config.h`.
-5. Copy [`sd/index.htm`](sd/index.htm) to the root of a FAT16/FAT32 SD card,
-   insert it in the shield, then compile and upload the sketch.
-6. Open Serial Monitor at 115200 baud for startup status.
-7. Put the PC on the `10.100.102.0/24` network and browse to
-   `http://10.100.102.247/`.
-
-The dashboard is served from the SD card and works without an internet
-connection. It includes a live
-time-versus-temperature graph, sensor cards, upper/lower limits, a
-1/2/5/10/custom-second sampling control, Start/Stop controls, alarm indication,
-and CSV download.
-
-## Logging behavior
-
-The Arduino writes `log.csv` to the SD card with:
+## Project structure
 
 ```text
-time_s,sensor,temperature_c
+firmware/
+├── esp32_wifi_logger/       ESP32 Wi-Fi firmware and embedded landing page
+└── uno_ethernet_logger/     Uno Ethernet firmware and SD landing page
+host/
+└── collector.py             Shared durable PC CSV collector
+tests/
+├── smoke_test.py            Offline API/collector smoke suite
+└── mock_arduino_server.py   Hardware-independent API simulator
+docs/
+├── esp32-wiring.md
+└── uno-wiring.md
 ```
 
-`time_s` is seconds since Arduino boot because the Uno/shield has no real-time
-clock. The controlling PC adds ISO-8601 wall-clock time and writes exactly:
+Controller-specific installation:
 
-```text
-time,temperature
-```
+- [`firmware/esp32_wifi_logger/README.md`](firmware/esp32_wifi_logger/README.md)
+- [`firmware/uno_ethernet_logger/README.md`](firmware/uno_ethernet_logger/README.md)
 
-Run one collector process per desired sensor:
+## ESP32 quick start
+
+The current ESP32 target is a classic **ESP32 Dev Module / ESP-WROOM-32** on
+COM21. Install Espressif's `esp32` board package and `OneWire`, then:
+
+1. Copy `firmware/esp32_wifi_logger/secrets.example.h` to `secrets.h`.
+2. Enter the Wi-Fi credentials in `secrets.h`.
+3. Upload `firmware/esp32_wifi_logger/esp32_wifi_logger.ino`.
+4. Open Serial Monitor at 115200 baud.
+5. Browse to `http://10.100.102.247/`.
+
+If Wi-Fi connection fails, the ESP32 creates `Temperature-Logger-Setup`; join
+it and browse to `http://192.168.4.1/`.
+
+Connect DS18B20 DATA to GPIO27 with one 4.7 kΩ pull-up to 3V3. GPIO26 is the
+3.3 V active-high alarm. See [`docs/esp32-wiring.md`](docs/esp32-wiring.md).
+
+## Host CSV collector
+
+The collector works with either controller and writes exactly two columns:
 
 ```powershell
 python host\collector.py --ip 10.100.102.247 --sensor 0 --output data\run.csv
 ```
 
-The collector follows the Arduino's configured sample interval and records only
-new samples while acquisition is running. It reconnects after temporary network
-failures. Press Ctrl+C to close the file cleanly.
+It records only new samples while acquisition is running and reconnects after
+temporary network failures. Run one process per sensor when separate files are
+required.
 
 ## HTTP API
 
-- `GET /api/status` — state, limits, sensor addresses, and latest samples
-- `GET /api/history` — compatibility alias for the current status/sample
-- `POST /api/control` with `action=start` or `action=stop`
-- `POST /api/config` with form fields `interval`, `lower`, and `upper`
-- `GET /api/latest?sensor=0` — latest sample as two-column CSV
-- `GET /api/csv` — download the SD log
+- `GET /` — landing page
+- `GET /api/status` — state, limits, alarm, sensor addresses and readings
+- `GET /api/history?sensor=0` — recent in-memory samples
+- `POST /api/control` — form field `action=start` or `action=stop`
+- `POST /api/config` — `interval`, `lower`, and `upper`
+- `GET /api/latest?sensor=0` — latest two-column CSV row
+- `GET /api/csv?sensor=0` — available history as two-column CSV
 
-The Uno has only 2 KB of SRAM, so graph history is retained in the browser and
-durable history is kept on SD/PC rather than in an in-memory firmware buffer.
+## Smoke tests
 
-## Tests
-
-The smoke suite uses only the Python standard library and needs no hardware:
+The hardware-independent suite uses only Python's standard library:
 
 ```powershell
 python tests\smoke_test.py
 ```
 
-To test a connected Arduino:
+Optional live test after uploading:
 
 ```powershell
 python tests\smoke_test.py --live --ip 10.100.102.247
 ```
 
-## Troubleshooting
+## ATE notes
 
-- **No sensors / `-127 °C`:** verify the 4.7 kΩ pull-up, 5 V supply, lead
-  ordering, common ground, and cable topology.
-- **Dashboard does not open:** verify link LEDs and that the PC can reach
-  `10.100.102.247` on the same subnet. Disable VPN routes that overlap it.
-- **SD unavailable:** format the card FAT16/FAT32 and ensure no other SPI device
-  drives chip select. Acquisition and PC streaming continue without SD.
-- **Unexpected alarm:** an invalid/disconnected sensor is deliberately
-  fail-safe and asserts D6 while acquisition is running.
-- **Wrong shield:** this firmware uses Arduino's `Ethernet` library for W5100/
-  W5500. ENC28J60 shields require different hardware and firmware support.
+- Use externally powered three-wire DS18B20 probes.
+- Prefer a linear/daisy-chain bus and short stubs.
+- Invalid or disconnected probes assert the alarm while running.
+- Neither board has a real-time clock; the host collector timestamps rows with
+  the PC's ISO-8601 wall-clock time.
+- Do not power the Uno and ESP32 variants together while both use
+  `10.100.102.247`.

@@ -70,8 +70,9 @@ class OfflineSmokeTests(unittest.TestCase):
         self.assertEqual(latest.splitlines()[0], "time,temperature")
         self.assertEqual(len(list(csv.reader(latest.splitlines()))[1]), 2)
 
-        history = json.loads(request(self.base_url, "/api/history"))
-        self.assertEqual(len(history["temperatures"]), 2)
+        history = json.loads(request(self.base_url, "/api/history?sensor=0"))
+        self.assertEqual(history["sensor"], 0)
+        self.assertEqual(len(history["points"][0]), 2)
 
         downloaded = request(self.base_url, "/api/csv").decode()
         self.assertEqual(

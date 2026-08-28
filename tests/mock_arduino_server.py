@@ -50,6 +50,9 @@ class DeviceState:
                 "running": self.running,
                 "alarm": alarm,
                 "sd": True,
+                "wifi": True,
+                "apMode": False,
+                "ip": "127.0.0.1",
                 "interval": self.interval,
                 "lower": self.lower,
                 "upper": self.upper,
@@ -101,11 +104,11 @@ class MockHandler(BaseHTTPRequestHandler):
         elif parsed.path == "/api/status":
             self.send_json(status)
         elif parsed.path == "/api/history":
+            sensor = int(parse_qs(parsed.query).get("sensor", ["0"])[0])
             self.send_json(
                 {
-                    "time": status["time"],
-                    "seq": status["seq"],
-                    "temperatures": [item["c"] for item in status["sensors"]],
+                    "sensor": sensor,
+                    "points": [[status["time"], status["sensors"][sensor]["c"]]],
                 }
             )
         elif parsed.path == "/api/latest":

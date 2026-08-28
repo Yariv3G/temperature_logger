@@ -6,6 +6,7 @@ __pycache__/
 .venv/
 venv/
 host/config.yaml
+**/secrets.h
 data/
 *.csv
 *.log
@@ -14,3 +15,4 @@ data/
 .pio/
 .tools/
 .arduino-data/
+debug-*.log
